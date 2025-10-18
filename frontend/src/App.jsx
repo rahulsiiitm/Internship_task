@@ -17,7 +17,7 @@ const FileIcon = () => (
 function App() {
   const [files, setFiles] = useState([]);
   const [template, setTemplate] = useState('1');
-  const [status, setStatus] = useState('idle');
+  const [status, setStatus] = useState('idle'); // idle, uploading, extracting, downloading, success, error
   const [errorMessage, setErrorMessage] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -54,18 +54,36 @@ function App() {
 
     try {
       setStatus('extracting');
-      const response = await fetch('http://127.0.0.1:8000/extract/', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.detail || `HTTP error! status: ${response.status}`);
+      
+      let response;
+      try {
+        response = await fetch('https://pdf-extraction-backend-b3bx.onrender.com/extract/', {
+          method: 'POST',
+          body: formData,
+          timeout: 300000, // 5 minute timeout
+        });
+      } catch (networkError) {
+        throw new Error('Cannot connect to backend server. Make sure the backend is running on https://pdf-extraction-backend-b3bx.onrender.com');
       }
 
-      setStatus('success');
+      if (!response.ok) {
+        let errorDetail = `HTTP error! status: ${response.status}`;
+        try {
+          const errData = await response.json();
+          errorDetail = errData.detail || errorDetail;
+        } catch (e) {
+          // If response is not JSON, use default error
+        }
+        throw new Error(errorDetail);
+      }
+
+      setStatus('downloading');
       const blob = await response.blob();
+      
+      if (blob.size === 0) {
+        throw new Error('Received empty file from server');
+      }
+
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -75,9 +93,12 @@ function App() {
       a.remove();
       window.URL.revokeObjectURL(url);
 
+      setStatus('success');
+
     } catch (error) {
       console.error("Extraction failed:", error);
-      setErrorMessage(`Extraction failed: ${error.message}`);
+      const errorMsg = error.message || 'An unknown error occurred';
+      setErrorMessage(errorMsg);
       setStatus('error');
     } finally {
       setTimeout(() => {
@@ -139,15 +160,16 @@ function App() {
           </div>
         )}
 
-        {/* Extract Button */}
+      {/* Extract Button */}
         <button
           className="action-button"
           onClick={handleExtract}
-          disabled={status === 'uploading' || status === 'extracting'}
+          disabled={status === 'uploading' || status === 'extracting' || status === 'downloading'}
         >
           {status === 'idle' && 'Start Extraction'}
           {status === 'uploading' && 'Uploading...'}
           {status === 'extracting' && 'Extracting Data...'}
+          {status === 'downloading' && 'Downloading...'}
           {status === 'success' && 'Download Complete'}
           {status === 'error' && 'Try Again'}
         </button>
@@ -157,11 +179,16 @@ function App() {
       {isProcessing && (
         <div className="loader-overlay">
           <div className="spinner"></div>
-          <p>Processing your files...</p>
+          <p>
+            {status === 'uploading' ? 'Uploading files...' : 
+             status === 'extracting' ? 'Extracting data from PDFs...' : 
+             status === 'downloading' ? 'Preparing your download...' : 
+             'Processing...'}
+          </p>
         </div>
       )}
 
-      <div className="footer-note">v1.0  Made by Rahul</div>
+      <div className="footer-note">v1.0</div>
     </body>
   );
 }
