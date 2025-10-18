@@ -27,7 +27,13 @@ This project was developed as part of an **internship task**, demonstrating prof
 
 ## Demo
 
-A short video demonstrating the complete workflow—PDF upload, template selection, data extraction, and Excel download—will be added here.
+## Demo
+
+A short demo showing the end-to-end workflow (upload PDFs, select template, and download the generated Excel).
+
+Watch the video:  
+[Demo: PDF Data Extraction Tool — YouTube](https://www.youtube.com/watch?v=7OCUxzgLaT8)
+
 
 ---
 
