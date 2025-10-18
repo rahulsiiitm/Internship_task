@@ -17,9 +17,11 @@ const FileIcon = () => (
 function App() {
   const [files, setFiles] = useState([]);
   const [template, setTemplate] = useState('1');
-  const [status, setStatus] = useState('idle'); // idle, uploading, extracting, downloading, success, error
+  const [status, setStatus] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const [maxRetries] = useState(3);
 
   const onDrop = useCallback(acceptedFiles => {
     const pdfFiles = acceptedFiles.filter(file => file.type === "application/pdf");
@@ -35,35 +37,20 @@ function App() {
     setFiles(files.filter(file => file.name !== fileName));
   };
 
-  const handleExtract = async () => {
-    if (files.length === 0) {
-      setErrorMessage("Please upload at least one PDF file.");
-      setStatus('error');
-      return;
-    }
-
-    setIsProcessing(true);
-    setStatus('uploading');
-    setErrorMessage('');
-
-    const formData = new FormData();
-    files.forEach(file => {
-      formData.append('files', file);
-    });
-    formData.append('template_id', template);
-
+  const extractWithRetry = async (formData, attempt = 0) => {
     try {
       setStatus('extracting');
-      
+      setRetryCount(attempt);
+
       let response;
       try {
-        response = await fetch('https://pdf-extraction-backend-b3bx.onrender.com/extract/', {
+        response = await fetch('http://127.0.0.1:8000/extract/', {
           method: 'POST',
           body: formData,
-          timeout: 300000, // 5 minute timeout
+          timeout: 300000,
         });
       } catch (networkError) {
-        throw new Error('Cannot connect to backend server. Make sure the backend is running on https://pdf-extraction-backend-b3bx.onrender.com');
+        throw new Error('Cannot connect to backend server. Make sure the backend is running on http://127.0.0.1:8000');
       }
 
       if (!response.ok) {
@@ -79,7 +66,7 @@ function App() {
 
       setStatus('downloading');
       const blob = await response.blob();
-      
+
       if (blob.size === 0) {
         throw new Error('Received empty file from server');
       }
@@ -94,12 +81,62 @@ function App() {
       window.URL.revokeObjectURL(url);
 
       setStatus('success');
+      setErrorMessage('');
+      setRetryCount(0);
 
     } catch (error) {
-      console.error("Extraction failed:", error);
+      console.error(`Extraction failed (Attempt ${attempt + 1}/${maxRetries}):`, error);
+
       const errorMsg = error.message || 'An unknown error occurred';
       setErrorMessage(errorMsg);
+
+      // Check if error is retryable and we have retries left
+      const isRetryableError = 
+        errorMsg.includes('invalid') || 
+        errorMsg.includes('incomplete') || 
+        errorMsg.includes('empty') ||
+        errorMsg.includes('timeout') ||
+        errorMsg.includes('LLM');
+
+      if (isRetryableError && attempt < maxRetries - 1) {
+        console.log(`Retrying extraction... (Attempt ${attempt + 2}/${maxRetries})`);
+        
+        // Wait before retrying (exponential backoff)
+        const waitTime = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        
+        // Retry with same formData
+        return extractWithRetry(formData, attempt + 1);
+      } else {
+        setStatus('error');
+        throw error;
+      }
+    }
+  };
+
+  const handleExtract = async () => {
+    if (files.length === 0) {
+      setErrorMessage("Please upload at least one PDF file.");
       setStatus('error');
+      return;
+    }
+
+    setIsProcessing(true);
+    setStatus('uploading');
+    setErrorMessage('');
+    setRetryCount(0);
+
+    const formData = new FormData();
+    files.forEach(file => {
+      formData.append('files', file);
+    });
+    formData.append('template_id', template);
+
+    try {
+      await extractWithRetry(formData, 0);
+    } catch (error) {
+      console.error("Final extraction failed:", error);
+      // Error state already set in extractWithRetry
     } finally {
       setTimeout(() => {
         setStatus('idle');
@@ -154,13 +191,14 @@ function App() {
         {status !== 'idle' && (
           <div className="status-section">
             {status === 'uploading' && 'Uploading files...'}
-            {status === 'extracting' && 'Extracting data from PDFs...'}
+            {status === 'extracting' && `Extracting data from PDFs${retryCount > 0 ? ` (Attempt ${retryCount + 1}/${maxRetries})` : ''}...`}
+            {status === 'downloading' && 'Preparing your download...'}
             {status === 'success' && 'Success! Your file is downloading...'}
-            {status === 'error' && errorMessage}
+            {status === 'error' && <span style={{ color: '#dc2626' }}>{errorMessage}</span>}
           </div>
         )}
 
-      {/* Extract Button */}
+        {/* Extract Button */}
         <button
           className="action-button"
           onClick={handleExtract}
@@ -181,7 +219,7 @@ function App() {
           <div className="spinner"></div>
           <p>
             {status === 'uploading' ? 'Uploading files...' : 
-             status === 'extracting' ? 'Extracting data from PDFs...' : 
+             status === 'extracting' ? `Extracting data from PDFs${retryCount > 0 ? ` (Attempt ${retryCount + 1}/${maxRetries})` : ''}...` : 
              status === 'downloading' ? 'Preparing your download...' : 
              'Processing...'}
           </p>
