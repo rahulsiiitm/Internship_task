@@ -1,24 +1,28 @@
-import os
 import io
+import os
 import json
+import google.generativeai as genai
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import pandas as pd
 import pdfplumber
-import google.generativeai as genai
-from typing import List
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from prompts import TEMPLATE_1_PROMPT, TEMPLATE_2_PROMPT
+from xlsxwriter import Workbook
 
-# --- Setup and Configuration ---
+
+# Load environment variables from .env file
 load_dotenv()
-api_key = os.getenv("GOOGLE_API_KEY")
-if not api_key:
-    raise ValueError("GOOGLE_API_KEY not found in .env file.")
-genai.configure(api_key=api_key)
 
 app = FastAPI()
-origins = ["http://localhost:3000", "http://localhost:5173"]
+
+# Configure CORS
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -27,131 +31,165 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Prompt Engineering Section ---
+# Configure the Gemini API key
+try:
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        print("Error: GOOGLE_API_KEY not found in .env file.")
+    else:
+        genai.configure(api_key=api_key)
+except Exception as e:
+    print(f"Error configuring Google API: {e}")
 
-def get_template_1_prompt(text_from_pdf: str) -> str:
-    """Template 1: Extracts detailed financial tables."""
-    json_structure = """
-    {
-      "schedule_of_investments": [
-        { "portfolio_company": "...", "industry": "...", "cost": 0, "fair_value": 0 }
-      ],
-      "statement_of_operations": [
-        { "description": "...", "amount": "..." }
-      ]
-    }
-    """
-    return f"""
-    You are an expert financial data extractor. Your task is to extract the 'Schedule of Investments' and 'Statement of Operations' tables.
-    Your final output must be a single, valid JSON object and nothing else, matching this structure: {json_structure}
-    Here is the text to analyze:
-    ---
-    {text_from_pdf}
-    ---
-    """
 
-def get_template_2_prompt(text_from_pdf: str) -> str:
-    """Template 2: Extracts document summary information."""
-    json_structure = """
-    {
-      "fund_name": "Name of the fund",
-      "document_type": "Type of the document (e.g., Financial Statement)",
-      "period_ending": "The date the reporting period ends",
-      "auditor_name": "The name of the auditing firm"
-    }
-    """
-    return f"""
-    You are an expert data extractor focused on metadata. Your task is to extract high-level summary information from the document.
-    Your final output must be a single, valid JSON object and nothing else, matching this structure: {json_structure}
-    Here is the text to analyze:
+def get_template_prompt(template_id):
+    if template_id == '1':
+        return TEMPLATE_1_PROMPT
+    elif template_id == '2':
+        return TEMPLATE_2_PROMPT
+    else:
+        raise HTTPException(status_code=400, detail="Invalid template ID provided.")
+
+
+def get_llm_extraction(text, template_id):
+    template_prompt = get_template_prompt(template_id)
+    full_prompt = f"""
+    {template_prompt}
+
+    Here is the text to process:
     ---
-    {text_from_pdf}
+    {text}
     ---
     """
 
-# --- Helper Function ---
-def clean_llm_json_output(raw_text: str) -> dict:
     try:
-        if raw_text.strip().startswith("```json"):
-            clean_text = raw_text.strip()[7:-3]
-        else:
-            clean_text = raw_text.strip()
-        return json.loads(clean_text)
-    except json.JSONDecodeError:
-        print(f"Error: Failed to decode JSON from LLM response: {raw_text}")
-        return {}
+        print("--- SENDING REQUEST TO GEMINI 2.5 PRO ---")
+        model = genai.GenerativeModel('gemini-2.5-pro')
+        response = model.generate_content(full_prompt)
+        
+        cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "")
+        
+        print("--- RECEIVED RESPONSE FROM GEMINI 2.5 PRO ---")
+        print(cleaned_response_text)
 
-# --- Main API Endpoint ---
-@app.post("/generate-excel-multi/")
-async def generate_excel_multi(
-    files: List[UploadFile] = File(...), 
-    template_id: str = Form(...)
-):
-    """
-    Processes multiple PDF files using a selected template and aggregates
-    the results into a single multi-sheet Excel file.
-    """
+        extracted_data = json.loads(cleaned_response_text)
+        return extracted_data
+
+    except json.JSONDecodeError as e:
+        print(f"Error: LLM returned invalid JSON. Details: {e}")
+        print("--- FAULTY RESPONSE TEXT ---")
+        print(cleaned_response_text)
+        raise HTTPException(status_code=500, detail="LLM returned data in an invalid format. Check the backend console.")
+    except Exception as e:
+        print(f"Error during LLM extraction: {e}")
+        raise HTTPException(status_code=500, detail=f"An error occurred during LLM extraction: {e}")
+
+
+@app.post("/extract/")
+async def extract_data(files: list[UploadFile] = File(...), template_id: str = Form(...)):
     if not files:
         raise HTTPException(status_code=400, detail="No files were uploaded.")
 
-    model = genai.GenerativeModel('gemini-pro-latest')
-    output_stream = io.BytesIO()
+    data_by_sheet = {}
 
-    with pd.ExcelWriter(output_stream, engine='openpyxl') as writer:
-        # Loop through each uploaded file
-        for i, file in enumerate(files):
-            try:
-                # 1. Extract text from the current PDF
-                pdf_stream = io.BytesIO(await file.read())
-                extracted_text = ""
-                with pdfplumber.open(pdf_stream) as pdf:
-                    for page in pdf.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            extracted_text += page_text + "\n"
-                
-                if not extracted_text.strip():
-                    continue # Skip empty files
+    for file in files:
+        if file.content_type != 'application/pdf':
+            print(f"Skipping non-PDF file: {file.filename}")
+            continue
 
-                # 2. Select the correct prompt based on template_id
-                if template_id == 'template1':
-                    prompt = get_template_1_prompt(extracted_text)
-                elif template_id == 'template2':
-                    prompt = get_template_2_prompt(extracted_text)
-                else:
-                    raise HTTPException(status_code=400, detail="Invalid template ID.")
+        try:
+            print(f"Processing file: {file.filename}")
+            pdf_text = ""
+            with pdfplumber.open(io.BytesIO(await file.read())) as pdf:
+                for i, page in enumerate(pdf.pages):
+                    print(f"Extracting text from page {i+1} of {file.filename}")
+                    page_text = page.extract_text(x_tolerance=1)
+                    if page_text:
+                        pdf_text += page_text + "\n"
 
-                # 3. Call LLM and process the data
-                response = model.generate_content(prompt)
-                data = clean_llm_json_output(response.text)
-                
-                # 4. Write extracted data to a new sheet for this file
-                # The sheet name will be a truncated version of the filename
-                sheet_name = f"File_{i+1}_{file.filename[:20]}"
-                
-                all_dfs = {}
-                for key, value in data.items():
-                    if isinstance(value, list):
-                        all_dfs[key] = pd.DataFrame(value)
-                    elif isinstance(value, dict):
-                         all_dfs[key] = pd.DataFrame([value])
-
-                # Create a temporary Excel writer for this file's data to merge into one sheet
-                temp_stream = io.BytesIO()
-                with pd.ExcelWriter(temp_stream, engine='openpyxl') as temp_writer:
-                    for df_name, df in all_dfs.items():
-                        df.to_excel(temp_writer, sheet_name=df_name, index=False)
-                
-                # For simplicity, we'll convert the main data to a DataFrame
-                # A more complex approach would be to write each sub-table to the sheet
-                main_df = pd.DataFrame.from_dict(data, orient='index').transpose()
-                main_df.to_excel(writer, sheet_name=sheet_name, index=False)
-
-            except Exception as e:
-                # If one file fails, we can skip it or handle the error
-                print(f"Failed to process {file.filename}: {e}")
+            if not pdf_text.strip():
+                print(f"Warning: No text could be extracted from {file.filename}.")
+                if "Errors" not in data_by_sheet: data_by_sheet["Errors"] = []
+                data_by_sheet["Errors"].append({"Source File": file.filename, "Error": "No text could be extracted."})
                 continue
 
-    output_stream.seek(0)
-    headers = {'Content-Disposition': f'attachment; filename="aggregated_extraction.xlsx"'}
-    return StreamingResponse(output_stream, headers=headers, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            llm_result = get_llm_extraction(pdf_text, template_id)
+
+            for sheet_name, rows in llm_result.items():
+                if not isinstance(rows, list): continue
+                
+                for row in rows:
+                    if isinstance(row, dict):
+                        row['Source File'] = file.filename
+                
+                if sheet_name not in data_by_sheet:
+                    data_by_sheet[sheet_name] = []
+                data_by_sheet[sheet_name].extend(rows)
+
+        except Exception as e:
+            print(f"Failed to process file {file.filename}: {e}")
+            if "Errors" not in data_by_sheet: data_by_sheet["Errors"] = []
+            error_detail = str(e.detail) if isinstance(e, HTTPException) else str(e)
+            data_by_sheet["Errors"].append({"Source File": file.filename, "Error": error_detail})
+
+    if not data_by_sheet or all(not data_by_sheet[sheet] for sheet in data_by_sheet if sheet != "Errors"):
+        if "Errors" in data_by_sheet and data_by_sheet["Errors"]:
+            pass
+        else:
+            raise HTTPException(status_code=500, detail="Data could not be extracted from any of the files.")
+
+    # Define which sheets should be transposed
+    SUMMARY_SHEETS = {
+        '1': ["Fund Data", "Fund Manager", "Fund Financial Position"],
+        '2': ["Portfolio Summary"]
+    }
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        for sheet_name, data in data_by_sheet.items():
+            if not data: continue
+            
+            df = None
+            # Check if the current sheet is a summary sheet for the selected template
+            if sheet_name in SUMMARY_SHEETS.get(template_id, []):
+                transposed_data = []
+                for row_dict in data:
+                    source_file = row_dict.get('Source File', 'N/A')
+                    for key, value in row_dict.items():
+                        if key != 'Source File':
+                            transposed_data.append({'Source File': source_file, 'Metric': key, 'Value': value})
+                df = pd.DataFrame(transposed_data)
+            else:
+                df = pd.DataFrame(data)
+
+            if df.empty: continue
+
+            # Reorder 'Source File' to be the first column
+            if 'Source File' in df.columns:
+                cols = ['Source File'] + [col for col in df.columns if col != 'Source File']
+                df = df[cols]
+            
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+            
+            # Auto-adjust column widths
+            worksheet = writer.sheets[sheet_name]
+            for idx, col in enumerate(df):
+                series = df[col]
+                max_len = max((
+                    series.astype(str).map(len).max(),
+                    len(str(series.name))
+                )) + 2
+                worksheet.set_column(idx, idx, max_len)
+
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=extracted_data.xlsx"}
+    )
+
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to the PDF Extraction API!"}
+

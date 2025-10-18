@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Extraction Tool - Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: Arial, sans-serif; 
+      background: #f5f5f5; 
+      padding: 20px;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 { color: #333; margin-bottom: 20px; }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: bold;
+      color: #555;
+    }
+    input[type="file"], select {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 10px;
+      border: none;
+      border-radius: 4px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+    .btn-extract {
+      background: #667eea;
+      color: white;
+    }
+    .btn-extract:hover:not(:disabled) { background: #5568d3; }
+    .btn-download {
+      background: #4caf50;
+      color: white;
+    }
+    .btn-download:hover:not(:disabled) { background: #45a049; }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .file-list {
+      background: #f9f9f9;
+      padding: 10px;
+      border-radius: 4px;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    .file-list li { list-style: none; padding: 5px 0; }
+    .status {
+      padding: 12px;
+      border-radius: 4px;
+      margin-bottom: 15px;
+      display: none;
+    }
+    .status.show { display: block; }
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .status.info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    .progress {
+      width: 100%;
+      height: 8px;
+      background: #e0e0e0;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 10px 0;
+      display: none;
+    }
+    .progress.show { display: block; }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+      width: 0%;
+      transition: width 0.3s;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📊 PDF Extraction Tool</h1>
+
+    <div id="status" class="status"></div>
+    <div class="progress"><div class="progress-bar"></div></div>
+
+    <div class="form-group">
+      <label for="template">Select Template:</label>
+      <select id="template">
+        <option value="1">Comprehensive Fund Report</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="files">Upload PDF Files:</label>
+      <input type="file" id="files" multiple accept=".pdf">
+      <ul class="file-list" id="fileList"></ul>
+    </div>
+
+    <button class="btn-extract" id="extractBtn" onclick="extractData()">🔍 Extract Data</button>
+    <button class="btn-download" id="downloadBtn" onclick="downloadExcel()" disabled>⬇️ Download Excel</button>
+  </div>
+
+  <script>
+    const API_URL = 'http://localhost:8000';
+    let selectedFiles = [];
+    let hasExtractedData = false;
+
+    document.getElementById('files').addEventListener('change', (e) => {
+      selectedFiles = Array.from(e.target.files);
+      updateFileList();
+    });
+
+    function updateFileList() {
+      const list = document.getElementById('fileList');
+      list.innerHTML = '';
+      selectedFiles.forEach(f => {
+        const li = document.createElement('li');
+        li.textContent = `📄 ${f.name}`;
+        list.appendChild(li);
+      });
+    }
+
+    function showStatus(msg, type) {
+      const status = document.getElementById('status');
+      status.textContent = msg;
+      status.className = `status show ${type}`;
+    }
+
+    function showProgress(percent) {
+      const progress = document.querySelector('.progress');
+      const bar = document.querySelector('.progress-bar');
+      progress.classList.toggle('show', percent > 0);
+      bar.style.width = percent + '%';
+    }
+
+    async function extractData() {
+      if (selectedFiles.length === 0) {
+        showStatus('❌ Please select PDF files', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('extractBtn');
+      btn.disabled = true;
+      showStatus('⏳ Extracting data...', 'info');
+      showProgress(30);
+
+      try {
+        const formData = new FormData();
+        selectedFiles.forEach(f => formData.append('files', f));
+        formData.append('template_id', document.getElementById('template').value);
+
+        const res = await fetch(`${API_URL}/extract`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) throw new Error('Extraction failed');
+        
+        showProgress(100);
+        hasExtractedData = true;
+        showStatus(`✅ Successfully extracted ${selectedFiles.length} file(s)`, 'success');
+        document.getElementById('downloadBtn').disabled = false;
+        
+        setTimeout(() => showProgress(0), 1000);
+      } catch (err) {
+        showStatus(`❌ Error: ${err.message}`, 'error');
+        hasExtractedData = false;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function downloadExcel() {
+      if (!hasExtractedData || selectedFiles.length === 0) {
+        showStatus('❌ Extract data first', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('downloadBtn');
+      btn.disabled = true;
+      showStatus('⏳ Generating Excel...', 'info');
+      showProgress(30);
+
+      try {
+        const formData = new FormData();
+        selectedFiles.forEach(f => formData.append('files', f));
+        formData.append('template_id', document.getElementById('template').value);
+
+        const res = await fetch(`${API_URL}/download`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) throw new Error('Download failed');
+
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Fund_Report_${Date.now()}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+
+        showProgress(100);
+        showStatus('✅ Excel file downloaded', 'success');
+        setTimeout(() => showProgress(0), 1000);
+      } catch (err) {
+        showStatus(`❌ Error: ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
