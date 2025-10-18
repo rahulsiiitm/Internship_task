@@ -38,12 +38,15 @@ A short video demonstrating the complete workflow—PDF upload, template selecti
 ├── backend/                
 │   ├── .env                
 │   ├── main.py             
-│   ├── prompts.py          
+│   ├── prompts.py 
+│   ├── query_database.py    
 │   └── requirements.txt
 ├── frontend/               
 │   ├── src/
 │   │   ├── App.jsx         
-│   │   └── App.css
+│   │   ├── App.css
+│   │   ├── main.jsx
+│   │   ├── index.css
 │   └── ...
 ├── templates/              
 │   ├── Extraction Template 1.xlsx
@@ -102,7 +105,7 @@ Run the backend server:
 uvicorn main:app --reload
 ```
 
-Backend will run at **http://localhost:8000**
+Backend will run at **https://pdf-extraction-backend-b3bx.onrender.com**
 
 ---
 
