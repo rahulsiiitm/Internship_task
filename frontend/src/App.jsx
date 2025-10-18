@@ -44,13 +44,13 @@ function App() {
 
       let response;
       try {
-        response = await fetch('http://127.0.0.1:8000/extract/', {
+        response = await fetch('https://pdf-extraction-backend-b3bx.onrender.com/extract/', {
           method: 'POST',
           body: formData,
           timeout: 300000,
         });
       } catch (networkError) {
-        throw new Error('Cannot connect to backend server. Make sure the backend is running on http://127.0.0.1:8000');
+        throw new Error('Cannot connect to backend server. Make sure the backend is running on https://pdf-extraction-backend-b3bx.onrender.com');
       }
 
       if (!response.ok) {
