@@ -17,17 +17,21 @@ load_dotenv()
 
 app = FastAPI()
 
+# Regex to match your Vercel deployments and localhost
+origins_regex = r"https?:\/\/((localhost:[0-9]+)|(pdfto-.*\.vercel\.app)|(pdftoxl\.vercel\.app))"
+
 # Configure CORS
 origins = [
     "http://localhost:3000",
     "http://localhost:5173",
-    "https://pdftoxl.vercel.app",  # Add your frontend URL here
+    "https://pdftoxl.vercel.app",
     "https://pdf-extraction-backend-b3bx.onrender.com",
+    "https://pdfto-833puv8fo-rahulsiiitms-projects.vercel.app"  # <-- ADD THIS LINE
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origin_regex=origins_regex, # Use regex instead of a list
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
