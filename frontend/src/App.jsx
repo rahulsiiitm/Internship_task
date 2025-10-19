@@ -50,6 +50,7 @@ function App() {
         method: 'GET',
       });
       if (response.ok) {
+        await new Promise(resolve => setTimeout(resolve, 500)); // Add delay
         setBackendReady(true);
         setErrorMessage('');
         setShowMessage(false);
@@ -60,11 +61,9 @@ function App() {
         throw new Error(`Backend returned ${response.status}`);
       }
     } catch (error) {
-      setErrorMessage('Failed to connect to backend. Please try again.');
+      setErrorMessage('Failed to connect to backend.');
       setShowMessage(true);
-      if (typeof window !== 'undefined' && window.va) {
-        window.va('event', { name: 'backend_connection_failed' });
-      }
+      setBackendReady(false);
     } finally {
       setBackendLoading(false);
     }
@@ -143,7 +142,7 @@ function App() {
       setErrorMessage('');
       setRetryCount(0);
       setShowMessage(true);
-      
+
       if (typeof window !== 'undefined' && window.va) {
         window.va('event', { name: 'extraction_success' });
       }
@@ -157,19 +156,19 @@ function App() {
       const errorMsg = error.message || 'An unknown error occurred';
       setErrorMessage(errorMsg);
 
-      const isRetryableError = 
-        errorMsg.includes('invalid') || 
-        errorMsg.includes('incomplete') || 
+      const isRetryableError =
+        errorMsg.includes('invalid') ||
+        errorMsg.includes('incomplete') ||
         errorMsg.includes('empty') ||
         errorMsg.includes('timeout') ||
         errorMsg.includes('LLM');
 
       if (isRetryableError && attempt < maxRetries - 1) {
         console.log(`Retrying extraction... (Attempt ${attempt + 2}/${maxRetries})`);
-        
+
         const waitTime = Math.pow(2, attempt) * 1000;
         await new Promise(resolve => setTimeout(resolve, waitTime));
-        
+
         return extractWithRetry(formData, attempt + 1);
       } else {
         setStatus('error');
@@ -194,7 +193,7 @@ function App() {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      
+
       setStatus('uploading');
       setErrorMessage('');
       setRetryCount(0);
@@ -343,9 +342,9 @@ function App() {
         <div className="loader-overlay">
           <div className="spinner"></div>
           <p>
-            {status === 'uploading' ? 'Uploading files...' : 
-             status === 'extracting' ? `Extracting data from PDFs${retryCount > 0 ? ` (Attempt ${retryCount + 1}/${maxRetries})` : ''}...` : 
-             'Preparing your download...'}
+            {status === 'uploading' ? 'Uploading files...' :
+              status === 'extracting' ? `Extracting data from PDFs${retryCount > 0 ? ` (Attempt ${retryCount + 1}/${maxRetries})` : ''}...` :
+                'Preparing your download...'}
           </p>
         </div>
       )}
