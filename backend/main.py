@@ -92,69 +92,49 @@ async def health_check():
     """Health check endpoint for backend readiness"""
     return {"status": "ok", "message": "Backend is running"}
 
-
 @app.post("/extract/")
 async def extract_data(files: list[UploadFile] = File(...), template_id: str = Form(...)):
     if not files:
         raise HTTPException(status_code=400, detail="No files were uploaded.")
 
+    # Process ONLY the first file from the list
+    file = files[0]
+    
+    if file.content_type != 'application/pdf':
+        raise HTTPException(status_code=400, detail="File must be a PDF.")
+
     data_by_sheet = {}
 
-    for file in files:
-        if file.content_type != 'application/pdf':
-            print(f"Skipping non-PDF file: {file.filename}")
-            continue
+    try:
+        print(f"Processing file: {file.filename}")
+        pdf_text = ""
+        with pdfplumber.open(io.BytesIO(await file.read())) as pdf:
+            for i, page in enumerate(pdf.pages):
+                print(f"Extracting text from page {i+1} of {file.filename}")
+                page_text = page.extract_text(x_tolerance=1)
+                if page_text:
+                    pdf_text += page_text + "\n"
 
-        try:
-            print(f"Processing file: {file.filename}")
-            pdf_text = ""
-            with pdfplumber.open(io.BytesIO(await file.read())) as pdf:
-                for i, page in enumerate(pdf.pages):
-                    print(f"Extracting text from page {i+1} of {file.filename}")
-                    page_text = page.extract_text(x_tolerance=1)
-                    if page_text:
-                        pdf_text += page_text + "\n"
+        if not pdf_text.strip():
+            raise HTTPException(status_code=500, detail="No text could be extracted from the PDF.")
 
-            if not pdf_text.strip():
-                print(f"Warning: No text could be extracted from {file.filename}.")
-                if "Errors" not in data_by_sheet: 
-                    data_by_sheet["Errors"] = []
-                data_by_sheet["Errors"].append({"Source File": file.filename, "Error": "No text could be extracted."})
+        llm_result = get_llm_extraction(pdf_text, template_id)
+
+        for sheet_name, rows in llm_result.items():
+            if not isinstance(rows, list): 
                 continue
+            
+            if sheet_name not in data_by_sheet:
+                data_by_sheet[sheet_name] = []
+            data_by_sheet[sheet_name].extend(rows)
 
-            llm_result = get_llm_extraction(pdf_text, template_id)
+    except Exception as e:
+        print(f"Failed to process file {file.filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing file: {e}")
 
-            # Process each sheet from LLM result
-            for sheet_name, rows in llm_result.items():
-                if not isinstance(rows, list): 
-                    continue
-                
-                # Add source file to each row
-                for row in rows:
-                    if isinstance(row, dict):
-                        row['Source File'] = file.filename
-                
-                # Initialize sheet if it doesn't exist
-                if sheet_name not in data_by_sheet:
-                    data_by_sheet[sheet_name] = []
-                
-                # Extend with new rows (this is the key fix for multiple files)
-                data_by_sheet[sheet_name].extend(rows)
+    if not data_by_sheet:
+        raise HTTPException(status_code=500, detail="Data could not be extracted from the file.")
 
-        except Exception as e:
-            print(f"Failed to process file {file.filename}: {e}")
-            if "Errors" not in data_by_sheet: 
-                data_by_sheet["Errors"] = []
-            error_detail = str(e.detail) if isinstance(e, HTTPException) else str(e)
-            data_by_sheet["Errors"].append({"Source File": file.filename, "Error": error_detail})
-
-    if not data_by_sheet or all(not data_by_sheet[sheet] for sheet in data_by_sheet if sheet != "Errors"):
-        if "Errors" in data_by_sheet and data_by_sheet["Errors"]:
-            pass
-        else:
-            raise HTTPException(status_code=500, detail="Data could not be extracted from any of the files.")
-
-    # Define which sheets should be transposed
     SUMMARY_SHEETS = {
         '1': ["Fund Data", "Fund Manager", "Fund Financial Position"],
         '2': ["Portfolio Summary"]
@@ -167,29 +147,20 @@ async def extract_data(files: list[UploadFile] = File(...), template_id: str = F
                 continue
             
             df = None
-            # Check if the current sheet is a summary sheet for the selected template
             if sheet_name in SUMMARY_SHEETS.get(template_id, []):
                 transposed_data = []
                 for row_dict in data:
-                    source_file = row_dict.get('Source File', 'N/A')
                     for key, value in row_dict.items():
-                        if key != 'Source File':
-                            transposed_data.append({'Source File': source_file, 'Metric': key, 'Value': value})
+                        transposed_data.append({'Metric': key, 'Value': value})
                 df = pd.DataFrame(transposed_data)
             else:
                 df = pd.DataFrame(data)
 
             if df.empty: 
                 continue
-
-            # Reorder 'Source File' to be the first column
-            if 'Source File' in df.columns:
-                cols = ['Source File'] + [col for col in df.columns if col != 'Source File']
-                df = df[cols]
             
             df.to_excel(writer, index=False, sheet_name=sheet_name)
             
-            # Auto-adjust column widths
             worksheet = writer.sheets[sheet_name]
             for idx, col in enumerate(df):
                 series = df[col]
@@ -200,14 +171,14 @@ async def extract_data(files: list[UploadFile] = File(...), template_id: str = F
                 worksheet.set_column(idx, idx, max_len)
 
     output.seek(0)
+    
+    file_name_without_ext = file.filename.rsplit('.', 1)[0]
 
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=extracted_data.xlsx"}
+        headers={"Content-Disposition": f"attachment; filename={file_name_without_ext}_extracted.xlsx"}
     )
-
-
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the PDF Extraction API!"}

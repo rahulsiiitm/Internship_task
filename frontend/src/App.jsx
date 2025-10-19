@@ -36,11 +36,8 @@ function App() {
   const [backendReady, setBackendReady] = useState(false);
   const [backendLoading, setBackendLoading] = useState(false);
 
-  // Initialize Vercel Analytics on mount
   useEffect(() => {
     initVercelAnalytics();
-    
-    // Track page view
     if (typeof window !== 'undefined' && window.va) {
       window.va('pageview');
     }
@@ -49,8 +46,6 @@ function App() {
   const wakeupBackend = async () => {
     setBackendLoading(true);
     try {
-      // Ensure your backend has a /health endpoint that returns 200
-      // If not, replace with an existing endpoint like /docs or /extract/
       const response = await fetch('http://127.0.0.1:8000/health', {
         method: 'GET',
       });
@@ -58,7 +53,6 @@ function App() {
         setBackendReady(true);
         setErrorMessage('');
         setShowMessage(false);
-        // Track successful backend connection
         if (typeof window !== 'undefined' && window.va) {
           window.va('event', { name: 'backend_connected' });
         }
@@ -66,9 +60,8 @@ function App() {
         throw new Error(`Backend returned ${response.status}`);
       }
     } catch (error) {
-      setErrorMessage('Failed to connect to backend. Please try again or check if the backend endpoint is correct.');
+      setErrorMessage('Failed to connect to backend. Please try again.');
       setShowMessage(true);
-      // Track backend connection failure
       if (typeof window !== 'undefined' && window.va) {
         window.va('event', { name: 'backend_connection_failed' });
       }
@@ -106,7 +99,7 @@ function App() {
           timeout: 300000,
         });
       } catch (networkError) {
-        throw new Error('Cannot connect to backend server. Make sure the backend is running on https://pdf-extraction-backend-b3bx.onrender.com');
+        throw new Error('Cannot connect to backend server.');
       }
 
       if (!response.ok) {
@@ -127,10 +120,20 @@ function App() {
         throw new Error('Received empty file from server');
       }
 
+      // Extract filename from Content-Disposition header
+      const contentDisposition = response.headers.get('content-disposition');
+      let filename = 'extracted_data.xlsx';
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename=([^;]+)/);
+        if (match) {
+          filename = match[1].replace(/"/g, '').trim();
+        }
+      }
+
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'extracted_data.xlsx';
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -141,10 +144,12 @@ function App() {
       setRetryCount(0);
       setShowMessage(true);
       
-      // Track successful extraction
       if (typeof window !== 'undefined' && window.va) {
         window.va('event', { name: 'extraction_success' });
       }
+
+      // Keep showing success message for 3 seconds
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
     } catch (error) {
       console.error(`Extraction failed (Attempt ${attempt + 1}/${maxRetries}):`, error);
@@ -152,7 +157,6 @@ function App() {
       const errorMsg = error.message || 'An unknown error occurred';
       setErrorMessage(errorMsg);
 
-      // Check if error is retryable and we have retries left
       const isRetryableError = 
         errorMsg.includes('invalid') || 
         errorMsg.includes('incomplete') || 
@@ -180,7 +184,6 @@ function App() {
       setErrorMessage("Please upload at least one PDF file.");
       setStatus('error');
       setShowMessage(true);
-      // Track error event
       if (typeof window !== 'undefined' && window.va) {
         window.va('event', { name: 'extraction_error_no_files' });
       }
@@ -188,35 +191,52 @@ function App() {
     }
 
     setIsProcessing(true);
-    setStatus('uploading');
-    setErrorMessage('');
-    setRetryCount(0);
-    setShowMessage(false);
 
-    // Track extraction start
-    if (typeof window !== 'undefined' && window.va) {
-      window.va('event', { name: 'extraction_started', value: files.length });
-    }
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      
+      setStatus('uploading');
+      setErrorMessage('');
+      setRetryCount(0);
+      setShowMessage(false);
 
-    const formData = new FormData();
-    files.forEach(file => {
-      formData.append('files', file);
-    });
-    formData.append('template_id', template);
+      console.log(`Processing file ${i + 1}/${files.length}: ${file.name}`);
 
-    try {
-      await extractWithRetry(formData, 0);
-    } catch (error) {
-      console.error("Final extraction failed:", error);
-      // Track extraction failure
       if (typeof window !== 'undefined' && window.va) {
-        window.va('event', { name: 'extraction_failed', value: error.message });
+        window.va('event', { name: 'extraction_started', value: 1 });
       }
-    } finally {
-      setTimeout(() => {
-        setIsProcessing(false);
-      }, 2000);
+
+      const formData = new FormData();
+      formData.append('files', file);
+      formData.append('template_id', template);
+
+      try {
+        await extractWithRetry(formData, 0);
+        console.log(`File ${i + 1} completed successfully`);
+      } catch (error) {
+        console.error("Extraction failed:", error);
+        if (typeof window !== 'undefined' && window.va) {
+          window.va('event', { name: 'extraction_failed', value: error.message });
+        }
+      }
+
+      if (i < files.length - 1) {
+        console.log(`Waiting before file ${i + 2}...`);
+        await new Promise(resolve => setTimeout(resolve, 2500));
+        // Clear message before next file
+        setShowMessage(false);
+      }
     }
+
+    // Keep success message visible if last file was successful
+    if (status !== 'error') {
+      // Message stays visible - user will see it
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      setShowMessage(false);
+    }
+
+    setStatus('idle');
+    setIsProcessing(false);
   };
 
   return (
@@ -225,28 +245,23 @@ function App() {
         <h1>PDF Extraction Tool</h1>
         <p>Leveraging AI to extract structured data from your documents.</p>
 
-        {/* Backend Status */}
-        {!backendReady ? (
-          <div className="backend-section">
-            <div className="backend-status">
-              <span className="status-dot"></span>
-              <span>Backend Status: {backendLoading ? 'Connecting...' : 'Offline'}</span>
-            </div>
+        <div className="backend-section">
+          <div className="backend-indicator">
+            <span className={`status-dot ${backendReady ? 'ready' : ''}`}></span>
+            <span className="backend-label">
+              {backendReady ? 'Backend Ready' : 'Backend Offline'}
+            </span>
+          </div>
+          {!backendReady && (
             <button
               className="wakeup-button"
               onClick={wakeupBackend}
               disabled={backendLoading}
             >
-              {backendLoading ? 'Connecting to Backend...' : 'Start Backend Service'}
+              {backendLoading ? 'Connecting...' : 'Start Backend'}
             </button>
-            <p className="backend-note">Click the button to wake up the render backend (first time startup ~30s)</p>
-          </div>
-        ) : (
-          <div className="backend-ready">
-            <span className="status-dot ready"></span>
-            <span>Backend is Ready!</span>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="template-selector">
           <label>Select an Extraction Template</label>
@@ -285,7 +300,6 @@ function App() {
           </div>
         )}
 
-        {/* Status - Visible during processing */}
         {(status === 'uploading' || status === 'extracting' || status === 'downloading') && (
           <div className="status-section">
             {status === 'uploading' && 'Uploading files...'}
@@ -294,7 +308,6 @@ function App() {
           </div>
         )}
 
-        {/* Completion Message - Shows above button after processing ends */}
         {showMessage && !isProcessing && (
           <div className={`completion-message ${status === 'success' ? 'success' : 'error'}`}>
             {status === 'success' && (
@@ -306,7 +319,7 @@ function App() {
             {status === 'error' && (
               <>
                 <div className="message-icon">✕</div>
-                <div className="message-text">{errorMessage}</div>
+                <div className="message-text">{errorMessage || 'An error occurred'}</div>
               </>
             )}
           </div>
@@ -326,7 +339,6 @@ function App() {
         </button>
       </div>
 
-      {/* Loader Overlay - Only shows during active processing */}
       {isProcessing && (status === 'uploading' || status === 'extracting' || status === 'downloading') && (
         <div className="loader-overlay">
           <div className="spinner"></div>
