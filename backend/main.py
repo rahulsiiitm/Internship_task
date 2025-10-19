@@ -87,6 +87,12 @@ def get_llm_extraction(text, template_id):
         raise HTTPException(status_code=500, detail=f"An error occurred during LLM extraction: {e}")
 
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for backend readiness"""
+    return {"status": "ok", "message": "Backend is running"}
+
+
 @app.post("/extract/")
 async def extract_data(files: list[UploadFile] = File(...), template_id: str = Form(...)):
     if not files:
@@ -111,26 +117,34 @@ async def extract_data(files: list[UploadFile] = File(...), template_id: str = F
 
             if not pdf_text.strip():
                 print(f"Warning: No text could be extracted from {file.filename}.")
-                if "Errors" not in data_by_sheet: data_by_sheet["Errors"] = []
+                if "Errors" not in data_by_sheet: 
+                    data_by_sheet["Errors"] = []
                 data_by_sheet["Errors"].append({"Source File": file.filename, "Error": "No text could be extracted."})
                 continue
 
             llm_result = get_llm_extraction(pdf_text, template_id)
 
+            # Process each sheet from LLM result
             for sheet_name, rows in llm_result.items():
-                if not isinstance(rows, list): continue
+                if not isinstance(rows, list): 
+                    continue
                 
+                # Add source file to each row
                 for row in rows:
                     if isinstance(row, dict):
                         row['Source File'] = file.filename
                 
+                # Initialize sheet if it doesn't exist
                 if sheet_name not in data_by_sheet:
                     data_by_sheet[sheet_name] = []
+                
+                # Extend with new rows (this is the key fix for multiple files)
                 data_by_sheet[sheet_name].extend(rows)
 
         except Exception as e:
             print(f"Failed to process file {file.filename}: {e}")
-            if "Errors" not in data_by_sheet: data_by_sheet["Errors"] = []
+            if "Errors" not in data_by_sheet: 
+                data_by_sheet["Errors"] = []
             error_detail = str(e.detail) if isinstance(e, HTTPException) else str(e)
             data_by_sheet["Errors"].append({"Source File": file.filename, "Error": error_detail})
 
@@ -149,7 +163,8 @@ async def extract_data(files: list[UploadFile] = File(...), template_id: str = F
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         for sheet_name, data in data_by_sheet.items():
-            if not data: continue
+            if not data: 
+                continue
             
             df = None
             # Check if the current sheet is a summary sheet for the selected template
@@ -164,7 +179,8 @@ async def extract_data(files: list[UploadFile] = File(...), template_id: str = F
             else:
                 df = pd.DataFrame(data)
 
-            if df.empty: continue
+            if df.empty: 
+                continue
 
             # Reorder 'Source File' to be the first column
             if 'Source File' in df.columns:
@@ -191,7 +207,7 @@ async def extract_data(files: list[UploadFile] = File(...), template_id: str = F
         headers={"Content-Disposition": "attachment; filename=extracted_data.xlsx"}
     )
 
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the PDF Extraction API!"}
-
