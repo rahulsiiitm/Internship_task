@@ -1,17 +1,7 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Analytics, track } from '@vercel/analytics/react';
 import './App.css';
-
-// Vercel Analytics
-const initVercelAnalytics = () => {
-  if (typeof window !== 'undefined') {
-    const script = document.createElement('script');
-    script.src = 'https://cdn.vercel-analytics.com/v1/script.js';
-    script.async = true;
-    document.head.appendChild(script);
-  }
-};
 
 const UploadIcon = () => (
   <svg className="w-12 h-12 mx-auto text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
@@ -37,7 +27,6 @@ function App() {
   const [backendReady, setBackendReady] = useState(false);
   const [backendLoading, setBackendLoading] = useState(false);
 
-
   const wakeupBackend = async () => {
     setBackendLoading(true);
     try {
@@ -50,7 +39,6 @@ function App() {
         setErrorMessage('');
         setShowMessage(false);
         track('backend_connected');
-
       } else {
         throw new Error(`Backend returned ${response.status}`);
       }
@@ -285,9 +273,12 @@ function App() {
           onClick={handleExtract}
           disabled={isProcessing || !backendReady}
         >
-          {isProcessing ? `${status.charAt(0).toUpperCase() + status.slice(1)}...` : 'Start Extraction'}
-          {status === 'error' && 'Try Again'}
+          {status === 'idle' && 'Start Extraction'}
+          {status === 'uploading' && 'Uploading...'}
+          {status === 'extracting' && 'Extracting...'}
+          {status === 'downloading' && 'Downloading...'}
           {status === 'success' && 'Start Extraction'}
+          {status === 'error' && 'Try Again'}
         </button>
       </div>
 
