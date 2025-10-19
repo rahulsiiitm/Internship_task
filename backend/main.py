@@ -21,8 +21,8 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",
     "http://localhost:5173",
+    "https://pdftoxl.vercel.app/",  # Add your frontend URL here
     "https://pdf-extraction-backend-b3bx.onrender.com",
-    "https://pdftoxl.vercel.app/"
 ]
 
 app.add_middleware(
