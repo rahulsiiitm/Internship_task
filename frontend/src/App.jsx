@@ -46,7 +46,7 @@ function App() {
   const wakeupBackend = async () => {
     setBackendLoading(true);
     try {
-      const response = await fetch('http://127.0.0.1:8000/health', {
+      const response = await fetch('https://pdf-extraction-backend-b3bx.onrender.com/health', {
         method: 'GET',
       });
       if (response.ok) {
@@ -93,7 +93,7 @@ function App() {
 
       let response;
       try {
-        response = await fetch('http://127.0.0.1:8000/extract/', {
+        response = await fetch('https://pdf-extraction-backend-b3bx.onrender.com/extract/', {
           method: 'POST',
           body: formData,
           timeout: 300000,
