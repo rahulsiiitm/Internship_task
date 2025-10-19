@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
+import { Analytics, track } from '@vercel/analytics/react';
 import './App.css';
 
 // Vercel Analytics
@@ -36,12 +37,6 @@ function App() {
   const [backendReady, setBackendReady] = useState(false);
   const [backendLoading, setBackendLoading] = useState(false);
 
-  useEffect(() => {
-    initVercelAnalytics();
-    if (typeof window !== 'undefined' && window.va) {
-      window.va('pageview');
-    }
-  }, []);
 
   const wakeupBackend = async () => {
     setBackendLoading(true);
@@ -50,13 +45,12 @@ function App() {
         method: 'GET',
       });
       if (response.ok) {
-        await new Promise(resolve => setTimeout(resolve, 500)); // Add delay
+        await new Promise(resolve => setTimeout(resolve, 500));
         setBackendReady(true);
         setErrorMessage('');
         setShowMessage(false);
-        if (typeof window !== 'undefined' && window.va) {
-          window.va('event', { name: 'backend_connected' });
-        }
+        track('backend_connected');
+
       } else {
         throw new Error(`Backend returned ${response.status}`);
       }
@@ -90,43 +84,29 @@ function App() {
       setStatus('extracting');
       setRetryCount(attempt);
 
-      let response;
-      try {
-        response = await fetch('https://pdf-extraction-backend-b3bx.onrender.com/extract/', {
-          method: 'POST',
-          body: formData,
-          timeout: 300000,
-        });
-      } catch (networkError) {
-        throw new Error('Cannot connect to backend server.');
-      }
+      const response = await fetch('https://pdf-extraction-backend-b3bx.onrender.com/extract/', {
+        method: 'POST',
+        body: formData,
+      });
 
       if (!response.ok) {
         let errorDetail = `HTTP error! status: ${response.status}`;
         try {
           const errData = await response.json();
           errorDetail = errData.detail || errorDetail;
-        } catch (e) {
-          // If response is not JSON, use default error
-        }
+        } catch (e) { /* Ignore JSON parsing error */ }
         throw new Error(errorDetail);
       }
 
       setStatus('downloading');
       const blob = await response.blob();
+      if (blob.size === 0) throw new Error('Received empty file from server');
 
-      if (blob.size === 0) {
-        throw new Error('Received empty file from server');
-      }
-
-      // Extract filename from Content-Disposition header
       const contentDisposition = response.headers.get('content-disposition');
       let filename = 'extracted_data.xlsx';
       if (contentDisposition) {
         const match = contentDisposition.match(/filename=([^;]+)/);
-        if (match) {
-          filename = match[1].replace(/"/g, '').trim();
-        }
+        if (match) filename = match[1].replace(/"/g, '').trim();
       }
 
       const url = window.URL.createObjectURL(blob);
@@ -142,33 +122,20 @@ function App() {
       setErrorMessage('');
       setRetryCount(0);
       setShowMessage(true);
-
-      if (typeof window !== 'undefined' && window.va) {
-        window.va('event', { name: 'extraction_success' });
-      }
-
-      // Keep showing success message for 3 seconds
+      track('extraction_success');
       await new Promise(resolve => setTimeout(resolve, 3000));
 
     } catch (error) {
       console.error(`Extraction failed (Attempt ${attempt + 1}/${maxRetries}):`, error);
-
       const errorMsg = error.message || 'An unknown error occurred';
       setErrorMessage(errorMsg);
 
-      const isRetryableError =
-        errorMsg.includes('invalid') ||
-        errorMsg.includes('incomplete') ||
-        errorMsg.includes('empty') ||
-        errorMsg.includes('timeout') ||
-        errorMsg.includes('LLM');
+      const isRetryableError = ['invalid', 'incomplete', 'empty', 'timeout', 'LLM'].some(term => errorMsg.includes(term));
 
       if (isRetryableError && attempt < maxRetries - 1) {
         console.log(`Retrying extraction... (Attempt ${attempt + 2}/${maxRetries})`);
-
         const waitTime = Math.pow(2, attempt) * 1000;
         await new Promise(resolve => setTimeout(resolve, waitTime));
-
         return extractWithRetry(formData, attempt + 1);
       } else {
         setStatus('error');
@@ -183,9 +150,7 @@ function App() {
       setErrorMessage("Please upload at least one PDF file.");
       setStatus('error');
       setShowMessage(true);
-      if (typeof window !== 'undefined' && window.va) {
-        window.va('event', { name: 'extraction_error_no_files' });
-      }
+      track('extraction_error_no_files');
       return;
     }
 
@@ -193,17 +158,12 @@ function App() {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-
       setStatus('uploading');
       setErrorMessage('');
       setRetryCount(0);
       setShowMessage(false);
-
       console.log(`Processing file ${i + 1}/${files.length}: ${file.name}`);
-
-      if (typeof window !== 'undefined' && window.va) {
-        window.va('event', { name: 'extraction_started', value: 1 });
-      }
+      track('extraction_started', { fileCount: 1 });
 
       const formData = new FormData();
       formData.append('files', file);
@@ -214,22 +174,17 @@ function App() {
         console.log(`File ${i + 1} completed successfully`);
       } catch (error) {
         console.error("Extraction failed:", error);
-        if (typeof window !== 'undefined' && window.va) {
-          window.va('event', { name: 'extraction_failed', value: error.message });
-        }
+        track('extraction_failed', { error: error.message });
       }
 
       if (i < files.length - 1) {
         console.log(`Waiting before file ${i + 2}...`);
         await new Promise(resolve => setTimeout(resolve, 2500));
-        // Clear message before next file
         setShowMessage(false);
       }
     }
 
-    // Keep success message visible if last file was successful
     if (status !== 'error') {
-      // Message stays visible - user will see it
       await new Promise(resolve => setTimeout(resolve, 3000));
       setShowMessage(false);
     }
@@ -240,7 +195,8 @@ function App() {
 
   return (
     <body>
-      <div className={`app-container ${isProcessing && (status === 'uploading' || status === 'extracting' || status === 'downloading') ? 'processing' : ''}`}>
+      <Analytics />
+      <div className={`app-container ${isProcessing ? 'processing' : ''}`}>
         <h1>PDF Extraction Tool</h1>
         <p>Leveraging AI to extract structured data from your documents.</p>
 
@@ -299,10 +255,10 @@ function App() {
           </div>
         )}
 
-        {(status === 'uploading' || status === 'extracting' || status === 'downloading') && (
+        {isProcessing && (
           <div className="status-section">
             {status === 'uploading' && 'Uploading files...'}
-            {status === 'extracting' && `Extracting data from PDFs${retryCount > 0 ? ` (Attempt ${retryCount + 1}/${maxRetries})` : ''}...`}
+            {status === 'extracting' && `Extracting data...${retryCount > 0 ? ` (Attempt ${retryCount + 1}/${maxRetries})` : ''}`}
             {status === 'downloading' && 'Preparing your download...'}
           </div>
         )}
@@ -329,21 +285,18 @@ function App() {
           onClick={handleExtract}
           disabled={isProcessing || !backendReady}
         >
-          {status === 'idle' && 'Start Extraction'}
-          {status === 'uploading' && 'Uploading...'}
-          {status === 'extracting' && 'Extracting Data...'}
-          {status === 'downloading' && 'Downloading...'}
-          {status === 'success' && 'Start Extraction'}
+          {isProcessing ? `${status.charAt(0).toUpperCase() + status.slice(1)}...` : 'Start Extraction'}
           {status === 'error' && 'Try Again'}
+          {status === 'success' && 'Start Extraction'}
         </button>
       </div>
 
-      {isProcessing && (status === 'uploading' || status === 'extracting' || status === 'downloading') && (
+      {isProcessing && (
         <div className="loader-overlay">
           <div className="spinner"></div>
           <p>
             {status === 'uploading' ? 'Uploading files...' :
-              status === 'extracting' ? `Extracting data from PDFs${retryCount > 0 ? ` (Attempt ${retryCount + 1}/${maxRetries})` : ''}...` :
+              status === 'extracting' ? `Extracting data...${retryCount > 0 ? ` (Attempt ${retryCount + 1}/${maxRetries})` : ''}` :
                 'Preparing your download...'}
           </p>
         </div>
